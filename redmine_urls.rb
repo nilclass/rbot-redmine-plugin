@@ -86,7 +86,11 @@ class RedmineUrlsPlugin < Plugin
 		# chat messages
 		return unless m.kind_of?(PrivMessage) && m.public?
 		
-		refs = m.message.scan(/(?:^|\W)(\[\d+\]|r\d+|\#\d+|wiki:\w+\#?\w+|changeset:\w+)(?:$|\W)/).flatten
+		refs = m.message.scan(/(?:^|\W)(\[\d+\]|r\d+|\#\d+|wiki:\w+\#?\w+|changeset:\w+)(?=$|\W)/).flatten
+    
+    if m.message =~ /\surgent$/
+      m.reply("test - #{params.inspect}")
+    end
 
 		# Do we have at least one possible reference?
 		return unless refs.length > 0
@@ -124,7 +128,10 @@ class RedmineUrlsPlugin < Plugin
 			m.reply "#{m.sourcenick}: #{params[:ref]} is #{url}" + (title ? " \"#{title}\"" : '')
 		end
 	end
-	
+
+  def urgent(m, params)
+  end
+
 	private
 	# Parse the Redmine reference given in +ref+, and try to construct a URL
 	# from +base+ to the resource.  Returns an array containing the URL
@@ -186,7 +193,7 @@ class RedmineUrlsPlugin < Plugin
 	end
 	
 	def bug_url(base_url, project, num)
-		base_url + '/issues/show/' + num
+		base_url + '/issues/' + num
 	end
 	
 	def wiki_url(base_url, project, page)
@@ -260,7 +267,7 @@ class RedmineUrlsPlugin < Plugin
 		b_auth_pword = @bot.config['redmine_urls.basic_auth_password']
 		auth_user = @bot.config['redmine_urls.auth_user']
 		auth_pass = @bot.config['redmine_urls.auth_pass']
-		debug("Setup: https: #{ssl}, auth: #{@bot.config['redmine_urls.basic_auth']} username: #{@bot.config['redmine_urls.basic_auth_username']} password: #{@bot.config['redmine_urls.basic_auth_password']}")
+		debug("Setup: https: #{ssl}, auth: #{@bot.config['redmine_urls.basic_auth']} username: #{@bot.config['redmine_urls.basic_auth_username']} password: #{@bot.config['redmine_urls.basic_auth_password']} OR user: #{@bot.config['redmine_urls.auth_user']} pass: #{@bot.config['redmine_urls.auth_pass']}")
 		if @bot.config['redmine_urls.https']
 			port = 443
 		else
@@ -272,8 +279,13 @@ class RedmineUrlsPlugin < Plugin
 		cookie = nil
 		if auth_user && auth_pass
 			http.start do |h|
+        req = Net::HTTP::Get.new('/login')
+        resp = h.request(req)
+        cookie = resp['set-cookie']
+        token = (Hpricot.parse(resp.body) / '//input[@name="authenticity_token"]').first[:value]
 				req = Net::HTTP::Post.new('/login')
-				req.set_form_data(:username => auth_user, :password => auth_pass)
+        req['cookie'] = cookie
+				req.set_form_data(:username => auth_user, :password => auth_pass, :authenticity_token => token)
 				resp = h.request(req)
 				cookie = resp['set-cookie']
 			end
@@ -289,6 +301,9 @@ class RedmineUrlsPlugin < Plugin
 		end
 
 		debug("Response object is #{resp.inspect} for #{url}")
+    
+    raise InvalidRedmineUrl.new("#{url} returned redirect ot #{resp.header['Location']}") if resp.code == '302'
+
 		raise InvalidRedmineUrl.new("#{url} returned #{resp.code} #{resp.message}") unless resp.code == '200'
 		elem = Hpricot.parse(resp.body).search(css_query).first
 		unless elem
